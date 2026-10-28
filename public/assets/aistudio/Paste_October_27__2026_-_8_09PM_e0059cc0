@@ -1,0 +1,284 @@
+Você é diretor de jogos de luta e engenheiro sênior de gameplay, especialista em frame data, design de personagens e pixel art no estilo dos clássicos 2D (Street Fighter III: 3rd Strike, The King of Fighters 98/2002, Darkstalkers/Vampire Savior, Garou: Mark of the Wolves). Crie um jogo de luta 2D COMPLETO e JOGÁVEL chamado **LUZ NEGRA: O Último Ato**.
+
+## 0. FORMATO DE ENTREGA
+- Um único arquivo `index.html` autocontido: HTML + CSS + JavaScript puro, Canvas 2D e Web Audio API. Nada de bibliotecas, assets, imagens ou fontes externas.
+- Código completo e funcional. PROIBIDO: placeholders, "// TODO", "// implementar depois", "// resto igual ao anterior".
+- Antes do código, escreva um resumo da arquitetura em no máximo 15 linhas. Depois disso, apenas o código.
+- Se o limite de saída não comportar tudo, divida a entrega em PARTES numeradas, cada uma terminando num ponto lógico. Eu digitarei "continue". Nunca resuma nem simplifique para caber.
+- Todos os dados de golpes ficam num objeto `MOVES` legível, separado da lógica, para facilitar o balanceamento.
+- Siga a ordem de prioridade da seção 12.
+
+## 1. PREMISSA
+1967. Por treze noites a lua sumiu do céu e as luzes elétricas morrem em cidades inteiras. A imprensa chama o fenômeno de "A Noite Sem Fim". No centro dele está a **Lanterna de Vésper**, uma relíquia forjada para aprisionar a primeira luz do mundo, que acabou de ser roubada da sua gaiola de cobre. Quatro pessoas (ou coisas) estão atrás dela.
+Tom: noir gótico + glamour retrô + horror sobrenatural. Pense em Darkstalkers encontrando um filme de espionagem dos anos 60.
+
+## 2. DIREÇÃO DE ARTE TÉCNICA (SPRITES)
+- Resolução nativa de 384×224 (a mesma da CPS-3), escalada por múltiplos inteiros com `imageSmoothingEnabled = false` e letterbox.
+- Personagens em pixel art com 96 a 112 px de altura, desenhados por código. Cada um tem um esqueleto 2D simples (quadril, tronco, cabeça, braço/antebraço e coxa/canela, duas de cada) e partes desenhadas com formas, contorno escuro de 1 px, sombreamento em 3 tons e paleta própria de no máximo 16 cores.
+- Silhuetas inconfundíveis mesmo em tamanho pequeno. As animações misturam a fluidez de SF3, a nitidez de KOF e o exagero (squash & stretch) de Darkstalkers.
+- Cada animação é uma lista de keyframes de pose com duração em frames. Golpes não usam interpolação suave entre keys, para manter o "snap" de sprite. Idle e andar podem interpolar.
+- Pré-renderize todos os quadros numa sprite sheet gerada em runtime (offscreen canvas) no carregamento e espelhe horizontalmente para o lado direito.
+- Elementos secundários usam física verlet simples de 4 a 6 pontos: a barra do vestido da Cassandra, a faixa do Boris, a capa do Gnhoif e as mangas da Barbara.
+- Cada personagem tem 2 paletas. Em espelho (mesmo personagem nos dois lados), o P2 usa a alternativa.
+- Crie uma interface `SpriteSource` para que o desenho procedural possa ser trocado por sprite sheets PNG no futuro.
+- Animações obrigatórias por personagem: intro, idle, andar para frente e para trás, agachar, pulo (subida/queda), dash, backdash, todos os golpes, hitstun alto e baixo, knockdown, levantar, defesa em pé e agachado, tonto, vitória, derrota por tempo e provocação.
+
+## 3. CONTROLES
+Notação numérica (numpad): 2 = baixo, 6 = frente, 4 = trás, 8 = cima. 236 = meia-lua para frente; 214 = meia-lua para trás; 623 = frente, baixo, diagonal; 63214 = meia-volta para trás; [4]6 = segurar trás por cerca de 40 frames e depois frente.
+Quatro botões, no estilo KOF: A = soco fraco, B = chute fraco, C = soco forte, D = chute forte.
+- P1: WASD para mover. Linha de cima = socos, linha de baixo = chutes:
+  - U = A (soco fraco), I = C (soco forte), O = atalho de A+B (rolamento)
+  - J = B (chute fraco), K = D (chute forte), L = atalho de C+D (Golpe de Impacto)
+  - Y = provocação.
+- P2: setas para mover, com o mesmo layout no numpad:
+  - Numpad 4 = A, 5 = C, 6 = atalho A+B
+  - Numpad 1 = B, 2 = D, 3 = atalho C+D
+  - Numpad 0 = provocação.
+  - Sem numpad: Insert / Home / PgUp (linha de cima) e Delete / End / PgDn (linha de baixo); Ctrl direito = provocação.
+- Os atalhos (O, L, Numpad 6 e 3) enviam os dois botões no mesmo frame. Apertar os dois botões manualmente continua valendo, com janela de 3 frames entre eles. Os atalhos não disparam versões EX.
+- Enter = start/confirmar, Esc = pausa, F1 = debug de hitboxes, M = mudo.
+- Suporte a controle via Gamepad API e remapeamento de teclas no menu de opções.
+
+## 4. SISTEMA DE LUTA UNIVERSAL
+- **Loop:** timestep fixo de 60 FPS com acumulador. A lógica é determinística e separada da renderização, e toda a jogabilidade é medida em frames.
+- **Entrada:** buffer de 20 frames. Leitura de comandos com tolerância: diagonais podem ser puladas e 2365 conta como 236. Prioridade super > especial > normal. Reversal no primeiro frame após levantar ou após o bloqueio.
+- **Movimento:** andar, agachar, dash (66), backdash (44, invencível nos frames 1 a 8), pulo curto (toque) e pulo normal (segurar), com 4 frames de pré-pulo. Pulo neutro, para frente e para trás.
+- **Normais:** A, B, C e D em pé (C e D com versões perto e longe), agachado e no ar. São no mínimo 14 normais por personagem, mais 1 ou 2 golpes de comando (ex.: 6+C overhead).
+- **Cancelamentos:** fracos encadeiam em fracos (chain). Normais marcados podem ser cancelados em especiais, e especiais marcados podem ser cancelados em super.
+- **Defesa:** segurar trás (alto/médio) ou trás-baixo (baixo). Overheads precisam ser defendidos em pé e golpes baixos, agachado. Chip damage é de 1/8 nos especiais e 1/4 nos supers, e só super pode matar com chip.
+- **Parry (SF3):** tocar 6 (alto) ou 2 (baixo) até 6 frames antes do impacto anula o dano. Aparece um flash azul, ambos congelam por 16 frames e quem aparou fica com vantagem. Também funciona no ar.
+- **Rolamento (A+B, KOF):** invencível a golpes nos frames 3 a 18, vulnerável a agarrão, com recuperação punível.
+- **Golpe de Impacto (C+D):** golpe que arremessa o oponente para longe e o derruba. Usado durante a defesa, vira "Contra-Guarda" e custa 1 barra.
+- **Agarrões:** perto + 4/6 + C ou D. Tech apertando C ou D até 7 frames depois de ser agarrado. Agarrões de comando não têm tech.
+- **Impacto:** hitstop de 8, 11 e 14 frames (fraco, forte e especial). Screenshake leve nos fortes. Pushback e, no canto, quem recua é o agressor.
+- **Bônus:** counter hit dá +4 frames de hitstun, +20% de dano e o texto "CONTRA-ATAQUE!". O primeiro acerto do round mostra "PRIMEIRO GOLPE!" e dá um bônus de barra.
+- **Escalonamento de combo:** 100%, 100%, 85%, 75%, 65%... até um mínimo de 30% (50% para supers). Contador de hits com dano total.
+- **Juggle:** cada golpe tem pontos de juggle, para impedir infinitos.
+- **Tontura:** barra de stun abaixo da vida, que se regenera fora de pressão. Quando enche, o personagem fica 120 frames tonto, e apertar direcionais e botões reduz o tempo.
+- **Barra de super:** 3 níveis. Enche ao acertar (mais), ao ter golpes defendidos, ao usar especiais e ao apanhar (menos).
+- **EX:** comando + A+C ou B+D, custa meia barra e dá uma versão melhorada do especial.
+- **Super flash:** a tela congela por 30 frames, o fundo escurece e entra um cut-in com o retrato do personagem e o nome do golpe, no estilo KOF.
+- **Levantar:** segurar 4 rola para trás ao levantar (tech roll).
+- **Referência de frame data (ajuste por personagem):**
+  - Startup/ativo/recuperação: A 4/2/7, B 5/3/8, C 7–9/3/18, D 8–11/4/20; especiais com startup de 10 a 20.
+  - Dano: A 30, B 35, C 90, D 100, especiais 80–140, agarrão 130, agarrão de comando 200, super Nv1 300, super Nv3 500.
+
+## 5. PERSONAGENS
+
+### 5.1 CASSANDRA VALE: "A Dama do Último Ato"
+**Arquétipo:** zoner de carga. Vida 1000, velocidade média; o backdash é uma estrelinha elegante.
+**História:** Nos cartazes, ela é a "rainha do suspense" da Meridian Pictures. Nos arquivos secretos, é a agente "Lírio" da Divisão Celuloide, que usa sets de filmagem como fachada para operações na Europa. Durante as filmagens de *A Dama do Eclipse*, alguém acendeu um refletor alimentado por um fragmento da Lanterna. Ivy, dublê e melhor amiga de Cassandra, desapareceu dentro da luz, e só a sombra dela ficou gravada na parede. A agência quer a Lanterna como arma. Cassandra quer Ivy de volta e não pretende entregar nada a ninguém.
+**Aparência:**
+- Corpo e cabelo: 1,75 m. Cabelo platinado em ondas sessentistas, preso por um grampo de esmeralda.
+- Roupa: vestido longo de cetim verde-esmeralda com fenda lateral (para os chutes) e luvas de ópera pretas.
+- Acessórios-arma: colar de pérolas de três voltas, que é um garrote; saltos agulha com lâmina retrátil no bico; batom vermelho, que é um dardo.
+- Submetralhadora: compacta, com acabamento de madrepérola e ouro. Sai de uma chapeleira listrada que fica no chão durante a intro.
+- Paleta principal: esmeralda, preto, ouro, pérola e vermelho-batom. Paleta alternativa: vestido rubi com luvas brancas.
+
+**Personalidade:** nunca perde a compostura nem o penteado. Ironia seca; fala como se estivesse sempre num close-up.
+**Intro:** um holofote a encontra enquanto ela ajusta as luvas. **Provocação:** retoca o batom num espelhinho.
+**Normais de assinatura:**
+- 6+C "Tapa de Luva": overhead lento.
+- 3+D "Rasteira de Gala": longa, derruba.
+- D aéreo: salto agulha para baixo, serve como cross-up.
+
+**Especiais:**
+- **Rajada de Gala** ([4]6 + A/C): rajada da submetralhadora. A dispara 3 tiros rápidos de curto alcance; C dispara 6 tiros com alcance de tela inteira e mais recuperação. A versão EX atravessa projéteis.
+- **Salto Agulha** ([2]8 + B/D): mortal para trás cortando com o salto. É anti-aéreo; a versão D é mais alta e invencível no início.
+- **Espelho Compacto** (214 + A/C): postura de contra-ataque por 20 frames. Se ela for atingida, o espelho solta um flash, o oponente fica atordoado e ela dá uma coronhada. A versão C também reflete projéteis.
+- **Tapete Vermelho** (236 + B/D): rolamento que passa por baixo de projéteis. Termina num calcanhar baixo (B) ou num salto com calcanhar overhead (D).
+
+**Agarrões:** Colar de Pérolas (garrote pelas costas, depois arremessa o oponente) e Valsa Fatal (no ar, gira o oponente como num baile e o lança).
+**Supers:**
+- **Nv1 Cena de Ação** (236236 + A/C): pirueta disparando em leque, com 12 hits.
+- **Nv3 Tomada Final** (236236 + B/D): ela lança o colar. Se acertar, a tela fica em preto e branco com granulação de filme e uma claquete marca "CENA 13, TOMADA FINAL". Ela dispara à queima-roupa, faz uma pose e uma cortina de cinema fecha com "FIM" antes de o oponente cair.
+
+**Frases de vitória:** "Querido, você não estava no roteiro." / "Ninguém derruba Cassandra Vale. No máximo, a gente refilma."
+
+### 5.2 BORIS DRAGOMIR: "A Última Presa da Caravana"
+**Arquétipo:** rushdown com veneno. Vida 950, rápido, dash longo; segurar 66 faz uma corrida.
+**História:** Boris é cigano (romani), da linhagem Dragomir de ferreiros e herbalistas que por gerações viajou pelos Cárpatos guardando um segredo: foram seus antepassados que forjaram a gaiola de cobre da Lanterna. Quando a Noite Sem Fim começou, homens carregando lanternas apagadas atacaram a caravana e levaram a gaiola. Boris sobreviveu porque a avó o "batizou", ainda menino, no veneno da víbora-de-chifre. Hoje esse veneno corre no sangue dele, e ele o destila nas lâminas que forja com as próprias mãos.
+**Aparência:**
+- Corpo e cabelo: 1,88 m, magro e anguloso. Cabelo preto longo com fios grisalhos, preso por anéis de cobre. Barba curta e uma cicatriz que atravessa a sobrancelha.
+- Roupa: camisa de linho branca com as mangas arregaçadas. Colete de veludo vinho bordado à mão em fio de cobre, trabalho da avó. Botas altas de couro.
+- Armas: faixa na cintura com 12 adagas curvas de cobre, com lâminas que pingam verde.
+- Detalhes: colar de moedas de cobre, uma para cada parente perdido. Quando ele usa veneno, as veias dos antebraços acendem em verde.
+- Paleta principal: vinho, cobre, linho, preto e verde-veneno. Paleta alternativa: colete azul-noite com bordado prateado.
+
+**Personalidade:** grave, melancólico e honrado. Cantarola canções antigas da família durante a luta. Ele não odeia: ele cobra.
+**Representação:** retrate a cultura romani com dignidade (ofício, família, memória), SEM estereótipos de trapaça, roubo ou vidência.
+**Mecânica única (Veneno):**
+- Golpes com adaga aplicam até 3 acúmulos de veneno.
+- Cada acúmulo drena 1 de vida a cada 10 frames durante 4 segundos.
+- O veneno nunca mata: a vida para em 1.
+- O sprite do envenenado ganha um tom esverdeado.
+
+**Normais de assinatura:**
+- 6+B "Passo Cruzado": avanço médio.
+- 2+D: rasteira giratória.
+- C perto: cotovelada.
+
+**Especiais:**
+- **Adaga Serpente** (236 + A/C, também no ar): A arremessa uma adaga reta e rápida; C arremessa duas, uma reta e uma em arco. No ar, a adaga desce na diagonal.
+- **Bote da Víbora** (214 + B/D): avança rastejando baixo, passando sob projéteis altos, e termina num corte ascendente. A versão D lança o oponente para juggle.
+- **Miasma** (22 + A/C): aura venenosa ao redor dele por 4 s (C: 6 s, raio maior e 8 s de recarga). Contato com a aura envenena, e os normais dele passam a aplicar veneno. Visual: névoa verde em espiral com serpentes translúcidas.
+- **Dança das Lâminas** (623 + A/C): giro ascendente com duas adagas, anti-aéreo. A versão C é invencível no início.
+
+**Agarrões:** Abraço do Ferreiro (segura pela gola, dá uma cabeçada e uma joelhada) e Mordida (no ar, crava a adaga e gira o oponente até o chão, aplicando veneno).
+**Supers:**
+- **Nv1 Cem Presas** (236236 + A/C, também no ar): leque de adagas em ondas que cobre a tela.
+- **Nv3 Réquiem da Caravana** (214214 + B/D): começa com um corte em investida. Se acertar, a tela escurece e uma caravana espectral verde dos antepassados Dragomir (carroças, cavalos e figuras de luz) atravessa o oponente, enquanto as moedas do colar tilintam. Termina com Boris de costas, embainhando as adagas. Aplica veneno máximo.
+
+**Frases de vitória:** "Minha avó lutava melhor. E ela tinha noventa anos." / "Cobre se dobra. Sangue Dragomir, não."
+
+### 5.3 GNHOIF: "O Que Veio Antes da Primeira Manhã"
+**Arquétipo:** controle de espaço com teleporte. Vida 1050, lento.
+- Flutua 6 px acima do chão e tem uma sombra sempre maior do que deveria.
+- Em vez de dash, 66/44 faz um deslize pela sombra.
+- O pulo é lento e flutuante, e segurar 8 no ar o faz pairar por até 30 frames.
+
+**História:** Antes da primeira manhã, já havia Gnhoif. Quando a luz nasceu, ele passou eras engolindo essa luz para que o mundo não queimasse de uma vez. A Lanterna de Vésper foi a jaula que os antigos criaram para guardar o excesso que ele não conseguia conter. Agora a jaula está aberta, e a luz antiga vaza pelas cidades na forma de apagões. Gnhoif voltou para devorá-la, junto com quem estiver segurando a Lanterna. Ninguém sabe se ele é guardião ou predador. Talvez nem ele saiba.
+**Aparência:**
+- Corpo: 2,30 m, magro demais, com articulações longas.
+- Capa: escuridão absoluta, feita de pixels #000000 que SUGAM A LUZ. Tudo num raio de cerca de 60 px ao redor dele escurece, incluindo o oponente e o cenário. A borda da capa ondula como fumaça ao contrário, sendo puxada para dentro.
+- Pele: nada humana. Uma superfície de obsidiana fria com brasas e constelações moribundas se movendo por baixo.
+- Rosto: máscara de osso lisa, com os olhos fechados por costuras de ouro. Quando os olhos se abrem, as costuras se rompem e jorra uma luz branco-dourada.
+- Foice: a lâmina é um eclipse solidificado, um crescente negro com uma coroa fina de luz no fio.
+- Paleta principal: preto absoluto, obsidiana, ouro, branco-solar e brasa. Paleta alternativa "Negativo": capa cor de osso e luz violeta.
+
+**Personalidade:** não fala. Suas falas aparecem como texto espelhado e sussurros (ruído filtrado). Movimentos solenes, ataques súbitos.
+**Normais de assinatura:**
+- C e D longe: golpes de foice com alcance de quase meia tela, lentos.
+- 2+D: varredura rasteira.
+- 6+C "Ceifa Descendente": overhead.
+
+**Especiais:**
+- **Olhar Solar** (236 + A/C): abre os olhos e dispara um feixe horizontal de luz que queima e derruba. A é curto e rápido; C cobre a tela inteira, tem 30 frames de startup e clareia o cenário inteiro por um instante. Depois de usá-lo, a escuridão ao redor dele some por 3 segundos.
+- **Colheita** (623 + A/C): a foice sobe em arco como anti-aéreo. A versão C faz dois arcos.
+- **Passo Umbral** (214 + B/D): afunda na própria sombra e reaparece na frente do oponente (B) ou atrás dele, cruzando (D).
+- **Manto Faminto** (22 + A/C): a capa se abre e absorve projéteis por 25 frames, ganhando barra a cada projétil absorvido. A versão C também absorve golpes físicos e contra-ataca com um corte.
+
+**Agarrões:** Envolver (cobre o oponente com a capa; ele some por um segundo e é cuspido do outro lado). Gnhoif não tem agarrão aéreo; em troca, tem alcance.
+**Supers:**
+- **Nv1 Meio-Dia Eterno** (236236 + A/C): feixe gigante dos olhos, da altura da tela, com vários hits. No ar, sai na diagonal para baixo.
+- **Nv3 Antes da Primeira Manhã** (214214 + A/C): uma onda de escuridão corre rente ao chão. Se tocar o oponente, a tela fica totalmente preta e só os olhos assustados dele brilham. Então milhares de olhos dourados se abrem ao redor ao mesmo tempo, e a luz o consome. O cenário fica dessaturado por 2 segundos depois.
+
+**Frases de vitória (espelhadas):** "A LUZ TAMBÉM TEM FOME." / "VOCÊ BRILHAVA. AGORA, NÃO."
+
+### 5.4 BARBARA WREN: "A Menina das Visitas"
+**Arquétipo:** agarradora com invocações. Vida 1100, andar lento, pulo baixo e pesado; 66 faz um trote de 3 passos.
+**História:** Barbara tem 23 anos. Desde criança ela via "os Visitantes", seres do Outro Lado que só ela enxergava. Aos 17, foi internada pela família no Sanatório Hollow Pines. Lá, o diretor, Dr. Aldous Crane, tentava "queimar" as visões dela com lâmpadas alimentadas por um fragmento da Lanterna. Não funcionou: as visões eram reais, e as lâmpadas só enfureceram os Visitantes. Na primeira noite do apagão, as luzes morreram, as portas se abriram e Barbara saiu descalça, acompanhada dos amigos. Ela nunca foi louca. Mas também não é inofensiva.
+**Representação:** não trate saúde mental como piada. O horror é a instituição que a prendeu, não ela.
+**Aparência:**
+- Corpo e rosto: 1,60 m, rosto de boneca de porcelana, sardas e grandes olhos cinzentos. Tranças ruivas desfeitas, amarradas com fitas de hospital.
+- Roupa: camisola hospitalar azul-clara, remendada com flores que ela mesma bordou. Por cima, uma camisa de força vestida aberta, com mangas longas cheias de fivelas que viram chicotes e laços.
+- Detalhes: pés descalços com curativos e pulseira de identificação "Nº 0413".
+- Paleta principal: azul-hospital, branco sujo, ruivo, rosa-giz e preto. Paleta alternativa: camisola preta com fitas vermelhas.
+
+**Os Visitantes:** desenhados com estética de giz de cera infantil, traço tremido e cores saturadas, em contraste com o pixel art limpo do resto do jogo.
+- *Senhor Botão*: coelho de pelúcia caolho que cresce até 3 m, com as costuras abertas.
+- *Dona Traça*: mariposa enorme feita de papel de parede antigo, com padrão floral nas asas.
+- *Gêmeos de Giz*: duas crianças-sombra desenhadas a giz no chão, que saem como mãos compridas.
+
+**Personalidade:** gentil, educada e curiosa. Pede desculpas antes de quebrar alguém e conversa com os Visitantes durante a luta.
+**Normais de assinatura:**
+- C perto: abraço com cotovelada.
+- 6+D "Amarelinha": pulinho com overhead.
+- 2+C: as mangas varrem como chicote, com alcance médio.
+
+**Especiais:**
+- **Abraço Apertado** (63214 + A/C perto; aceite também giro de 360°): agarrão de comando sem tech. As mangas amarram o oponente e ela faz um suplex giratório (A) ou um piledriver (C, mais dano e menos alcance).
+- **Chamado: Senhor Botão** (214 + A/C): o coelho surge atrás dela e dá um soco de longo alcance (A) ou esmaga de cima com um overhead (C). A invocação é semi-independente: Barbara volta a agir antes de ela terminar.
+- **Chamado: Dona Traça** (236 + B/D): a mariposa voa pela tela como um projétil lento que cobre a aproximação. B vai reta, rente ao chão; D sobe em arco como anti-aéreo.
+- **Mãos de Giz** (22 + B/D): desenhos se abrem no chão a meia distância (B) ou longe (D) e prendem os pés do oponente por 40 frames.
+- **Amarelinha da Morte** (623 + B/D): três pulinhos para frente terminando num agarrão que pega oponentes no chão e perde para golpes rápidos.
+
+**Agarrões:** Ciranda (gira o oponente pelas mãos como numa brincadeira de roda e o solta longe) e Cavalinho (no ar, agarra pelas costas e cai sentada).
+**Supers:**
+- **Nv1 Hora do Recreio** (236236 + B/D): todos os Visitantes espancam o oponente numa sequência caótica de 10 hits.
+- **Nv3 Canção de Ninar** (63214 63214 + A/C, agarrão perto): Barbara abraça o oponente com carinho e a tela escurece. Uma canção de ninar ORIGINAL (escreva você) aparece letra por letra. O Senhor Botão segura o oponente, a Dona Traça o envolve num casulo e os Gêmeos de Giz desenham um X gigante no chão, onde ele cai de uma altura enorme. Barbara: "Boa noite."
+
+**Frases de vitória:** "Desculpa! O Senhor Botão não gosta quando gritam comigo." / "Ninguém nunca acreditou em mim. Agora acredita?"
+
+**Falas pré-luta:** escreva uma fala de pré-luta específica para cada combinação de personagens (12 falas no total), coerente com as histórias acima.
+
+## 6. CENÁRIOS
+Cada cenário tem o dobro da largura da tela (768 px), câmera que segue o ponto médio entre os lutadores, 3 camadas de parallax, elementos animados e trilha própria. Os cenários 1 e 2 são obrigatórios.
+1. **Estúdio 13, Meridian Pictures (Hollywood):**
+   - Set de filme noir em plena filmagem: rua cenográfica de compensado, lua pintada num painel gigante e câmeras em gruas.
+   - Refletores varrem o palco, e silhuetas da equipe e dos figurantes reagem aos golpes. Uma claquete bate entre os rounds.
+   - No round final, um refletor estoura e só as luzes vermelhas de emergência continuam acesas.
+2. **Clareira das Mil Lanternas (Cárpatos):**
+   - Noite num pinheiral, com carroças (vardos) pintadas à mão em vermelho e dourado formando um círculo.
+   - Fogueira central soltando faíscas e lanternas de cobre balançando nas árvores.
+   - Silhuetas da família batem palmas no ritmo da música, sobre montanhas em parallax e folhas caindo.
+3. **Sanatório Hollow Pines, Ala Leste:**
+   - Temporal, azulejos rachados, macas e cadeiras de rodas, com lâmpadas fluorescentes piscando.
+   - Relâmpagos revelam por um único frame as silhuetas dos Visitantes nas janelas altas.
+   - Há desenhos de giz nas paredes, e um deles muda de pose a cada knockdown.
+4. **Observatório do Eclipse (palco final):**
+   - Telhado em ruínas acima das nuvens, com um sol negro coroado de luz no céu e destroços flutuando para cima.
+   - Ao fundo, a Lanterna de Vésper pulsa dentro da gaiola, e a iluminação do cenário respira junto com ela.
+
+## 7. MODOS E TELAS
+- **Título** animado ("APERTE START") e menu com: Arcade, Versus (2 jogadores locais), Treino e Opções.
+- **Seleção de personagem** em grade 2×2, com retratos desenhados por código, arquétipo, dificuldade em estrelas e escolha de paleta.
+- Seleção de cenário (ou aleatório), tela de VS com retratos e fala do confronto, e tela de vitória com a frase do vencedor.
+- **Arcade:**
+  - 3 lutas contra os outros personagens e o chefe **SOMBRA**: uma cópia do seu personagem feita da escuridão do Gnhoif, com paleta invertida, contorno violeta, +20% de dano e IA um nível acima do selecionado. Se você jogar com o Gnhoif, a Sombra é feita de luz (branca e dourada).
+  - Texto de introdução da história, tela de continue com contagem regressiva e um final de 4 a 6 telas de texto para cada personagem.
+- **Pausa:** continuar, lista de golpes do personagem, reiniciar e sair.
+- **Treino:**
+  - Vida e barra infinitas, reset de posição e comportamento do boneco (em pé, agachado, pulando, defende tudo, defende após o 1º hit ou controlado pela CPU).
+  - Exibição de hitboxes: hurtbox verde, hitbox vermelha, pushbox azul e invencibilidade amarela.
+  - Exibição de vantagem de frames (+3/−5) e histórico de inputs.
+- **Opções:** dificuldade (Fácil, Normal, Difícil, Pesadelo), tempo de round (60, 99 ou ∞), número de rounds (1, 3 ou 5), volumes e remapeamento de teclas.
+
+## 8. IA DA CPU
+- Gera inputs pelo MESMO sistema de entrada dos jogadores e só reage ao que um humano veria, com atraso de reação de 24, 16, 10 ou 6 frames conforme a dificuldade.
+- Comportamento por arquétipo:
+  - Cassandra mantém distância.
+  - Boris pressiona e usa veneno.
+  - Gnhoif teleporta e pune.
+  - Barbara avança e agarra.
+- Faz anti-aéreos, defende, pune golpes inseguros e usa super para fechar combos. Erra de propósito no Fácil e no Normal.
+
+## 9. HUD (tudo em PT-BR)
+- Barras de vida com retrato e nome, e um rastro vermelho que drena com atraso.
+- Marcadores de round e timer central com fonte pixel desenhada por código.
+- Barra de super com o número do nível, barra de stun, contador de combo e ícones de status (veneno).
+- Mensagens: ROUND 1, LUTEM!, K.O., TEMPO!, EMPATE e PERFEITO!
+
+## 10. ÁUDIO (Web Audio procedural)
+- **Efeitos sonoros:** impactos com ruído filtrado (mais graves nos fortes), defesa com clique metálico, parry com sino agudo, rajada da submetralhadora, assobio das adagas, varredura do feixe de luz, invocações e KO com reverb.
+- **Música** (sequenciador simples em loop, um tema por cenário):
+  - Estúdio: jazz de espionagem dos anos 60 com surf guitar.
+  - Clareira: folk do Leste Europeu em tom menor.
+  - Sanatório: caixinha de música que DESAFINA conforme a vida da Barbara cai.
+  - Observatório: drone grave com coral sintetizado.
+- Locutor opcional via speechSynthesis. O áudio só começa após a primeira interação do usuário.
+
+## 11. EFEITOS VISUAIS
+- **Faíscas por tipo**, sem sangue: impacto colorido por força, defesa em azul, parry em flash branco-azulado, veneno em respingos verdes e luz em estilhaços dourados.
+- **Golpes:** sombras elípticas sob os lutadores, afterimages nos supers e screenshake.
+- **Partículas** de cada cenário: folhas, chuva, faíscas e poeira.
+- **KO final:** câmera lenta de 60 frames com flash, no estilo KOF/SF.
+- **Iluminação dinâmica:** um gradiente radial escurece a área ao redor do Gnhoif, e o Olhar Solar ilumina o cenário inteiro.
+
+## 12. PRIORIDADES
+- **P1 (obrigatório):**
+  - Engine, entrada e todo o sistema da seção 4, exceto parry, rolamento e EX.
+  - Os 4 personagens com TODOS os normais, especiais, agarrões e supers.
+  - Cenários 1 e 2, HUD e sistema de rounds (melhor de 3).
+  - Modos Versus e Treino com hitboxes.
+- **P2:** CPU, Arcade com finais, parry, rolamento, EX, áudio completo e cenários 3 e 4.
+- **P3:** paletas alternativas, física verlet, câmera lenta no KO, locutor e remapeamento de teclas.
+
+## 13. CRITÉRIOS DE ACEITAÇÃO (autoavalie antes de entregar)
+- [ ] Abre no navegador sem erros no console e roda a 60 FPS estáveis.
+- [ ] 236+A sai de forma consistente, e [4]6 exige carga real.
+- [ ] Golpes defendidos só causam chip, agarrão vence defesa e perde para pulo, e projéteis se anulam ao colidir.
+- [ ] As hitboxes exibidas com F1 batem com o desenho, os lutadores não se atravessam nem saem da tela, e se viram sozinhos ao trocar de lado.
+- [ ] Não existem combos infinitos, e o round termina por KO ou tempo.
+- [ ] Cada personagem é reconhecível só pela silhueta.
+- [ ] As teclas U, I, O, J, K e L funcionam como descrito, inclusive os atalhos de rolamento e Golpe de Impacto.
